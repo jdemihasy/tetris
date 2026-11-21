@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Тетрис из человечков</title>
+<style>
+  :root { --bg:#e9eff2; --panel:#f8fbfc; --ink:#1d2b36; --grid:#d3dde2; --muted:#5b6c78; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141c22; --panel:#1c262e; --ink:#e6eef3; --grid:#2a3741; --muted:#93a4b0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:var(--bg); color:var(--ink); font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif; }
+  .game { display:flex; gap:20px; padding:16px; align-items:flex-start; flex-wrap:wrap; justify-content:center; }
+  canvas { background:var(--panel); border-radius:10px; display:block; }
+  #board { border:2px solid var(--ink); max-width:100%; height:auto; }
+  .side { width:150px; display:flex; flex-direction:column; gap:12px; }
+  h1 { font-size:20px; margin:0; line-height:1.2; }
+  .stat { font-size:13px; color:var(--muted); }
+  .stat b { display:block; font-size:24px; color:var(--ink); font-weight:700; }
+  button { font:inherit; font-size:15px; padding:10px 12px; border:2px solid var(--ink); border-radius:8px;
+           background:var(--ink); color:var(--bg); cursor:pointer; }
+  button:focus-visible { outline:3px solid #3a5bd6; outline-offset:2px; }
+  .pad { display:none; grid-template-columns:repeat(4,1fr); gap:6px; width:100%; }
+  .pad button { padding:12px 0; font-size:18px; background:var(--panel); color:var(--ink); }
+  @media (pointer:coarse) { .pad { display:grid; } }
+  .hint { font-size:12px; color:var(--muted); line-height:1.5; }
+</style>
+</head>
+<body>
+<div class="game">
+  <canvas id="board" width="300" height="600" aria-label="Игровое поле"></canvas>
+  <div class="side">
+    <h1>Тетрис из человечков</h1>
+    <canvas id="next" width="120" height="90" aria-label="Следующая фигура"></canvas>
+    <div class="stat">Очки<b id="score">0</b></div>
+    <div class="stat">Линии<b id="lines">0</b></div>
+    <div class="stat">Уровень<b id="level">1</b></div>
+    <button id="start">Новая игра</button>
+    <div class="hint">← → двигать<br>↑ повернуть<br>↓ ускорить<br>Пробел — сбросить<br>P — пауза</div>
+  </div>
+  <div class="pad" aria-label="Кнопки управления">
+    <button data-k="left" aria-label="Влево">◀</button>
+    <button data-k="rot" aria-label="Повернуть">⟳</button>
+    <button data-k="down" aria-label="Вниз">▼</button>
+    <button data-k="right" aria-label="Вправо">▶</button>
+    <button data-k="drop" aria-label="Сбросить" style="grid-column:1/-1">Сбросить</button>
+  </div>
+</div>
+<script>
+const COLS = 10, ROWS = 20, S = 30;
+const COLORS = { I:'#1f9bd1', O:'#d99a00', T:'#8e4ec6', S:'#2e9d57', Z:'#d6403a', J:'#3a5bd6', L:'#e2701f' };
+const SHAPES = {
+  I:[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+  O:[[1,1],[1,1]],
+  T:[[0,1,0],[1,1,1],[0,0,0]],
+  S:[[0,1,1],[1,1,0],[0,0,0]],
+  Z:[[1,1,0],[0,1,1],[0,0,0]],
+  J:[[1,0,0],[1,1,1],[0,0,0]],
+  L:[[0,0,1],[1,1,1],[0,0,0]]
+};
+const board = document.getElementById('board'), bctx = board.getContext('2d');
+const nextC = document.getElementById('next'), nctx = nextC.getContext('2d');
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+let grid, cur, nextType, score, lines, level, over, paused, last, acc, started = false;
+
+const bag = [];
+function randType() {
+  if (!bag.length) { bag.push(...Object.keys(SHAPES)); for (let i=bag.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[bag[i],bag[j]]=[bag[j],bag[i]];} }
+  return bag.pop();
+}
+function spawn() {
+  const type = nextType || randType();
+  nextType = randType();
+  const m = SHAPES[type].map(r => r.slice());
+  cur = { type, m, x:((COLS - m[0].length)/2)|0, y:0 };
+  if (hit(cur.m, cur.x, cur.y)) { over = true; }
+}
+function hit(m, px, py) {
+  for (let y=0;y<m.length;y++) for (let x=0;x<m[y].length;x++) if (m[y][x]) {
+    const gx=px+x, gy=py+y;
+    if (gx<0 || gx>=COLS || gy>=ROWS) return true;
+    if (gy>=0 && grid[gy][gx]) return true;
+  }
+  return false;
+}
+function reset() {
+  grid = Array.from({length:ROWS}, () => Array(COLS).fill(0));
+  score = 0; lines = 0; level = 1; over = false; paused = false; acc = 0; last = performance.now();
+  nextType = null; spawn(); started = true; ui();
+}
+function ui() { $('score').textContent = score; $('lines').textContent = lines; $('level').textContent = level; }
+function move(dx) { if (!hit(cur.m, cur.x+dx, cur.y)) cur.x += dx; }
+function rotate() {
+  const r = cur.m[0].map((_,i) => cur.m.map(row => row[i]).reverse());
+  for (const k of [0,-1,1,-2,2]) if (!hit(r, cur.x+k, cur.y)) { cur.m = r; cur.x += k; return; }
+}
+function lock() {
+  cur.m.forEach((row,y) => row.forEach((v,x) => { if (v && cur.y+y>=0) grid[cur.y+y][cur.x+x] = cur.type; }));
+  let n = 0;
+  for (let y=ROWS-1;y>=0;y--) if (grid[y].every(Boolean)) { grid.splice(y,1); grid.unshift(Array(COLS).fill(0)); n++; y++; }
+  if (n) { score += [0,100,300,500,800][n]*level; lines += n; level = 1 + (lines/10|0); ui(); }
+  spawn();
+}
+function step() { if (!hit(cur.m, cur.x, cur.y+1)) { cur.y++; return true; } lock(); return false; }
+function drop() { while (!hit(cur.m, cur.x, cur.y+1)) { cur.y++; score += 2; } ui(); lock(); }
+
+// Один человечек в клетке: руки тянутся к краям клетки, поэтому соседи держатся за руки.
+function man(ctx, x, y, s, color, ink, hasLeft, hasRight) {
+  const cx = x + s/2;
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = Math.max(2, s/11); ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx, y+s*.38); ctx.lineTo(cx, y+s*.68);                 // туловище
+  ctx.moveTo(cx, y+s*.46); ctx.lineTo(x+(hasLeft?0:s*.14), y+s*(hasLeft?.5:.34));   // левая рука
+  ctx.moveTo(cx, y+s*.46); ctx.lineTo(x+s-(hasRight?0:s*.14), y+s*(hasRight?.5:.34)); // правая рука
+  ctx.moveTo(cx, y+s*.68); ctx.lineTo(x+s*.28, y+s*.96);            // ноги
+  ctx.moveTo(cx, y+s*.68); ctx.lineTo(x+s*.72, y+s*.96);
+  ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, y+s*.23, s*.15, 0, 7); ctx.fill();   // голова
+  ctx.fillStyle = ink; // глаза
+  ctx.fillRect(cx - s*.07, y+s*.2, s*.035, s*.035); ctx.fillRect(cx + s*.035, y+s*.2, s*.035, s*.035);
+}
+function filled(m, x, y) { return !!(m[y] && m[y][x]); }
+function drawPiece(ctx, m, type, ox, oy, s, ink) {
+  m.forEach((row,y) => row.forEach((v,x) => {
+    if (v) man(ctx, ox+x*s, oy+y*s, s, COLORS[type], ink, filled(m,x-1,y), filled(m,x+1,y));
+  }));
+}
+function draw() {
+  const ink = css('--ink'), g = css('--grid');
+  bctx.clearRect(0,0,300,600);
+  bctx.strokeStyle = g; bctx.lineWidth = 1; bctx.beginPath();
+  for (let i=1;i<COLS;i++){bctx.moveTo(i*S,0);bctx.lineTo(i*S,600);}
+  for (let i=1;i<ROWS;i++){bctx.moveTo(0,i*S);bctx.lineTo(300,i*S);}
+  bctx.stroke();
+  for (let y=0;y<ROWS;y++) for (let x=0;x<COLS;x++) if (grid[y][x]) {
+    bctx.fillStyle = COLORS[grid[y][x]];
+    man(bctx, x*S, y*S, S, COLORS[grid[y][x]], ink, !!grid[y][x-1], !!grid[y][x+1]);
+  }
+  if (cur && !over) drawPiece(bctx, cur.m, cur.type, cur.x*S, cur.y*S, S, ink);
+  nctx.clearRect(0,0,120,90);
+  if (nextType) { const m = SHAPES[nextType], s = 22; drawPiece(nctx, m, nextType, (120-m[0].length*s)/2, (90-m.length*s)/2, s, ink); }
+  if (over || paused || !started) {
+    bctx.fillStyle = 'rgba(0,0,0,.55)'; bctx.fillRect(0,230,300,130);
+    bctx.fillStyle = '#fff'; bctx.textAlign = 'center'; bctx.font = 'bold 26px "Trebuchet MS",sans-serif';
+    bctx.fillText(!started ? 'Готовы?' : over ? 'Игра окончена' : 'Пауза', 150, 285);
+    bctx.font = '15px "Trebuchet MS",sans-serif';
+    bctx.fillText(!started || over ? 'Нажмите «Новая игра» или Enter' : 'Нажмите P, чтобы продолжить', 150, 320);
+  }
+}
+function loop(t) {
+  if (started && !over && !paused) {
+    acc += t - last;
+    const speed = Math.max(90, 800 - (level-1)*70);
+    while (acc >= speed && !over) { acc -= speed; step(); }
+  }
+  last = t; draw(); requestAnimationFrame(loop);
+}
+function act(k) {
+  if (!started || over || paused) return;
+  if (k==='left') move(-1); else if (k==='right') move(1);
+  else if (k==='rot') rotate(); else if (k==='down') { if (step()) score += 1; ui(); }
+  else if (k==='drop') drop();
+}
+document.addEventListener('keydown', e => {
+  const map = { ArrowLeft:'left', ArrowRight:'right', ArrowUp:'rot', ArrowDown:'down', ' ':'drop' };
+  if (map[e.key]) { e.preventDefault(); act(map[e.key]); }
+  else if (e.key==='p' || e.key==='P' || e.key==='з' || e.key==='З') { if (started && !over) paused = !paused; }
+  else if (e.key==='Enter' && (!started || over)) reset();
+});
+document.querySelectorAll('.pad button').forEach(b => b.addEventListener('click', () => act(b.dataset.k)));
+$('start').addEventListener('click', () => { reset(); $('start').blur(); });
+grid = Array.from({length:ROWS}, () => Array(COLS).fill(0)); nextType = randType();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
